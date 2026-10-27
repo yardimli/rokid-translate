@@ -9,6 +9,7 @@ import path from 'node:path';
 
 const deviceToken = 'device-test-token-000000000000000000';
 const dashboardToken = 'dashboard-test-token-000000000000000';
+const dashboardUsername = 'tester', dashboardPassword = 'test-password-123456';
 function messages(ws) {
   const pending = [], received = [];
   ws.on('message', raw => {
@@ -26,11 +27,14 @@ function messages(ws) {
   };
 }
 async function fixture(t, options = {}) {
-  const app = createDiagnosticServer({ deviceToken, dashboardToken, origin: 'http://localhost', ...options });
+  const app = createDiagnosticServer({ deviceToken, dashboardToken, dashboardUsername, dashboardPassword, origin: 'http://localhost', ...options });
   app.server.listen(0, '127.0.0.1'); await once(app.server, 'listening');
   t.after(() => app.close());
   const base = `http://127.0.0.1:${app.server.address().port}`;
-  return { base, wsBase: base.replace('http:', 'ws:') };
+  const login = await fetch(base + '/api/login', { method: 'POST', headers: { Origin: 'http://localhost', 'Content-Type': 'application/json' }, body: JSON.stringify({ username: dashboardUsername, password: dashboardPassword }) });
+  assert.equal(login.status, 200);
+  const cookie = login.headers.get('set-cookie').split(';')[0];
+  return { base, cookie, wsBase: base.replace('http:', 'ws:') };
 }
 test('configuration is device-authenticated, secrets are never returned', async t => {
   const { base } = await fixture(t);
@@ -40,25 +44,26 @@ test('configuration is device-authenticated, secrets are never returned', async 
   assert.equal((await fetch(base + '/.env')).status, 404);
 });
 test('device auth and dashboard origin are enforced', async t => {
-  const { wsBase } = await fixture(t);
+  const { wsBase, cookie } = await fixture(t);
   for (const [route, options] of [['/device', {}], ['/dashboard', { origin: 'https://evil.invalid' }]]) {
     const ws = new WebSocket(wsBase + route, options);
     const [req, res] = await once(ws, 'unexpected-response');
     assert.equal(res.statusCode, 401); res.resume(); req.destroy();
   }
 });
-test('wrong dashboard token is rejected', async t => {
-  const { wsBase } = await fixture(t);
-  const ws = new WebSocket(wsBase + '/dashboard', { origin: 'http://localhost' });
-  await once(ws, 'open'); const closed = once(ws, 'close');
-  ws.send(JSON.stringify({ type: 'auth', token: deviceToken }));
-  assert.equal((await closed)[0], 1008);
+test('dashboard token alone no longer grants browser access', async t => {
+  const { wsBase, base } = await fixture(t);
+  const ws = new WebSocket(wsBase + '/dashboard', { origin: 'http://localhost', headers: { Authorization: `Bearer ${dashboardToken}` } });
+  const [req, res] = await once(ws, 'unexpected-response');
+  assert.equal(res.statusCode, 401); res.resume(); req.destroy();
+  assert.equal((await fetch(base + '/api/recordings/x/input.wav', { headers: { Authorization: `Bearer ${dashboardToken}` } })).status, 401);
 });
+
 test('PCM flows to metrics; captions return and are acknowledged; disconnect removes device', async t => {
-  const { wsBase } = await fixture(t);
-  const dashboard = new WebSocket(wsBase + '/dashboard', { origin: 'http://localhost' });
+  const { wsBase, cookie } = await fixture(t);
+  const dashboard = new WebSocket(wsBase + '/dashboard', { origin: 'http://localhost', headers: { Cookie: cookie } });
   const nextDashboard = messages(dashboard);
-  await once(dashboard, 'open'); dashboard.send(JSON.stringify({ type: 'auth', token: dashboardToken }));
+  await once(dashboard, 'open');
   await nextDashboard(m => m.type === 'snapshot');
   const device = new WebSocket(wsBase + '/device', { headers: { Authorization: `Bearer ${deviceToken}` } });
   const nextDevice = messages(device);
@@ -80,7 +85,7 @@ test('PCM flows to metrics; captions return and are acknowledged; disconnect rem
   const empty = await nextDashboard(m => m.type === 'metrics' && m.devices.length === 0); assert.deepEqual(empty.devices, []);
 });
 test('audio before format negotiation is rejected', async t => {
-  const { wsBase } = await fixture(t);
+  const { wsBase, cookie } = await fixture(t);
   const device = new WebSocket(wsBase + '/device', { headers: { Authorization: `Bearer ${deviceToken}` } });
   await once(device, 'open'); const closed = once(device, 'close'); device.send(Buffer.alloc(100));
   assert.equal((await closed)[0], 1008);
@@ -89,7 +94,7 @@ test('audio before format negotiation is rejected', async t => {
 test('translation routes PCM, mirrors exact deltas, drains final text and saves authenticated recordings', async t => {
   const recordingsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rokid-recording-test-'));
   let callbacks, pushed = [], stopped = false;
-  const { base, wsBase } = await fixture(t, { recordingsDir, openaiApiKey: 'fake-private-key', translationFactory(options) {
+  const { base, wsBase, cookie } = await fixture(t, { recordingsDir, openaiApiKey: 'fake-private-key', translationFactory(options) {
     callbacks = options;
     queueMicrotask(() => options.onState('translating'));
     return { push(pcm) { pushed.push(pcm); }, stop() {
@@ -98,9 +103,9 @@ test('translation routes PCM, mirrors exact deltas, drains final text and saves 
     }, abort() { options.onState('stopped'); } };
   } });
   t.after(() => fs.rmSync(recordingsDir, { recursive: true, force: true }));
-  const dashboard = new WebSocket(wsBase + '/dashboard', { origin: 'http://localhost' });
+  const dashboard = new WebSocket(wsBase + '/dashboard', { origin: 'http://localhost', headers: { Cookie: cookie } });
   const next = messages(dashboard);
-  await once(dashboard, 'open'); dashboard.send(JSON.stringify({ type: 'auth', token: dashboardToken }));
+  await once(dashboard, 'open');
   const initial = await next(m => m.type === 'settings');
   assert.equal(initial.apiKeyConfigured, true); assert.equal(initial.settings.enabled, false);
   assert.ok(!JSON.stringify(initial).includes('fake-private-key'));
@@ -129,7 +134,7 @@ test('translation routes PCM, mirrors exact deltas, drains final text and saves 
   const fileUrl = `${base}/api/recordings/${id}/input.wav`;
   assert.equal((await fetch(fileUrl)).status, 401);
   assert.equal((await fetch(fileUrl, { headers: { Authorization: `Bearer ${deviceToken}` } })).status, 401);
-  const response = await fetch(fileUrl, { headers: { Authorization: `Bearer ${dashboardToken}` } });
+  const response = await fetch(fileUrl, { headers: { Cookie: cookie } });
   const wav = Buffer.from(await response.arrayBuffer());
   assert.equal(wav.toString('ascii', 0, 4), 'RIFF'); assert.equal(wav.readUInt32LE(40), pcm.length);
   assert.deepEqual(wav.subarray(44), pcm);
@@ -141,13 +146,43 @@ test('translation routes PCM, mirrors exact deltas, drains final text and saves 
 });
 
 test('missing API key and invalid translation settings are rejected', async t => {
-  const { wsBase } = await fixture(t);
-  const dashboard = new WebSocket(wsBase + '/dashboard', { origin: 'http://localhost' });
+  const { wsBase, cookie } = await fixture(t);
+  const dashboard = new WebSocket(wsBase + '/dashboard', { origin: 'http://localhost', headers: { Cookie: cookie } });
   const next = messages(dashboard);
-  await once(dashboard, 'open'); dashboard.send(JSON.stringify({ type: 'auth', token: dashboardToken }));
+  await once(dashboard, 'open');
   const { settings } = await next(m => m.type === 'settings');
   dashboard.send(JSON.stringify({ type: 'settings', settings: { ...settings, enabled: true } }));
   assert.match((await next(m => m.type === 'error')).message, /OPENAI_API_KEY/);
   dashboard.send(JSON.stringify({ type: 'settings', settings: { ...settings, targetLanguage: '../../etc' } }));
   assert.match((await next(m => m.type === 'error')).message, /Invalid/);
+});
+
+test('login rejects bad credentials/origins, cookies authorize and logout revokes sockets and downloads', async t => {
+  const { base, wsBase, cookie } = await fixture(t);
+  const login = (origin, password) => fetch(base + '/api/login', { method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json' }, body: JSON.stringify({ username: dashboardUsername, password }) });
+  assert.equal((await login('https://evil.invalid', dashboardPassword)).status, 403);
+  assert.equal((await login('http://localhost', 'wrong')).status, 401);
+  const response = await login('http://localhost', dashboardPassword);
+  assert.match(response.headers.get('set-cookie'), /HttpOnly/);
+  assert.match(response.headers.get('set-cookie'), /SameSite=Strict/);
+  assert.ok(!(await response.text()).includes(dashboardToken));
+  assert.equal((await fetch(base + '/api/session', { headers: { Cookie: cookie } })).status, 200);
+  assert.equal((await fetch(base + '/api/session', { headers: { Cookie: cookie + 'tampered' } })).status, 401);
+  const ws = new WebSocket(wsBase + '/dashboard', { origin: 'http://localhost', headers: { Cookie: cookie } });
+  await once(ws, 'open'); const closed = once(ws, 'close');
+  assert.equal((await fetch(base + '/api/logout', { method: 'POST', headers: { Origin: 'https://evil.invalid', Cookie: cookie } })).status, 403);
+  assert.equal((await fetch(base + '/api/logout', { method: 'POST', headers: { Origin: 'http://localhost', Cookie: cookie } })).status, 200);
+  await closed;
+  assert.equal((await fetch(base + '/api/session', { headers: { Cookie: cookie } })).status, 401);
+  assert.equal((await fetch(base + '/api/recordings/x/input.wav', { headers: { Cookie: cookie } })).status, 401);
+  const page = await (await fetch(base)).text();
+  assert.ok(!page.includes('id="token"'));
+});
+
+test('login attempts are bounded', async t => {
+  const { base } = await fixture(t);
+  let response;
+  for (let i = 0; i < 21; i++) response = await fetch(base + '/api/login', { method: 'POST', headers: { Origin: 'http://localhost', 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'bad', password: 'bad' }) });
+  assert.equal(response.status, 429);
+  assert.equal(response.headers.get('retry-after'), '60');
 });

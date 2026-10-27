@@ -1,0 +1,30 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { Readable } from 'node:stream';
+import { createDashboardAuth } from '../src/dashboard-auth.js';
+
+test('HTTPS sessions are secure, expire, close attached sockets, and do not survive restart', async () => {
+  let time = 1000;
+  const options = { username: 'tester', password: 'private-password', secret: 'private-signing-secret', origin: 'https://translate.playground.computer', now: () => time };
+  const auth = createDashboardAuth(options);
+  const req = Readable.from([Buffer.from(JSON.stringify({ username: options.username, password: options.password }))]);
+  req.method = 'POST'; req.headers = { origin: options.origin, 'content-type': 'application/json' };
+  const headers = {};
+  const res = { setHeader(key, value) { headers[key] = value; }, writeHead(status) { this.status = status; }, end(body) { this.body = body; } };
+  await auth.handle(req, res, '/api/login');
+  assert.equal(res.status, 200);
+  assert.match(headers['Set-Cookie'], /^__Host-rokid_session=/);
+  assert.match(headers['Set-Cookie'], /; Secure/);
+  assert.match(headers['Set-Cookie'], /HttpOnly/);
+  assert.ok(!headers['Set-Cookie'].includes(options.secret));
+  assert.ok(!res.body.includes(options.password));
+  const request = { headers: { cookie: headers['Set-Cookie'].split(';')[0] } };
+  const session = auth.session(request);
+  assert.ok(session);
+  assert.equal(createDashboardAuth(options).session(request), null);
+  let terminated = false;
+  auth.attach(session, { on() {}, terminate() { terminated = true; } });
+  time += 8 * 60 * 60 * 1000 + 1;
+  assert.equal(auth.session(request), null);
+  assert.equal(terminated, true);
+});

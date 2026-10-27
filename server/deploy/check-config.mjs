@@ -2,6 +2,9 @@
 import { pathToFileURL } from 'node:url';
 
 export function validateDeployment(env) {
+  if (!env.DASHBOARD_USERNAME || !env.DASHBOARD_PASSWORD || env.DASHBOARD_PASSWORD.length < 12) {
+    throw new Error('Set DASHBOARD_USERNAME and DASHBOARD_PASSWORD (at least 12 characters) in server/.env before deploying');
+  }
   for (const key of ['DEVICE_TOKEN', 'DASHBOARD_TOKEN']) {
     if (!env[key] || env[key].length < 24 || env[key].startsWith('replace-')) throw new Error(`Set ${key} in the installed .env`);
   }

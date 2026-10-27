@@ -3,6 +3,8 @@ import { createDiagnosticServer } from './server.js';
 const app = createDiagnosticServer({
   deviceToken: process.env.DEVICE_TOKEN,
   dashboardToken: process.env.DASHBOARD_TOKEN,
+  dashboardUsername: process.env.DASHBOARD_USERNAME,
+  dashboardPassword: process.env.DASHBOARD_PASSWORD,
   origin: process.env.PUBLIC_ORIGIN,
   logDir: process.env.LOG_DIR || './logs',
   openaiApiKey: process.env.OPENAI_API_KEY || '',

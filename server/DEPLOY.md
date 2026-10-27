@@ -7,6 +7,33 @@ The dashboard is served by this same process. Apache handles the public domain a
 PHP can remain on your existing main-domain virtual host. A conventional PHP request is not the
 persistent WebSocket worker we need; using Node behind Apache avoids changing your PHP setup.
 
+## Dashboard username/password login
+
+Before deploying this update, add these settings to `/opt/rokid-translate/server/.env`:
+
+```dotenv
+DASHBOARD_USERNAME=your-chosen-username
+DASHBOARD_PASSWORD="your-long-unique-password"
+```
+
+Use at least 12 characters for the password. Quote values containing spaces or `#` using
+Node's .env syntax. Keep your existing DASHBOARD_TOKEN: it is now the server-side signing
+secret for browser sessions and is never sent to the browser. DEVICE_TOKEN is unchanged.
+
+```bash
+cd /opt/rokid-translate
+git pull --ff-only
+sudo nano server/.env
+bash server/deploy/update.sh --no-pull
+```
+
+The deployment preflight refuses missing login credentials before changing the running service.
+Open the site and sign in with your username/password. Sessions use HttpOnly, SameSite=Strict,
+Secure cookies on HTTPS and expire after 8 hours. Restarting Node or signing out invalidates
+sessions. Logout closes that session's dashboard sockets; it does not stop glasses translation.
+Downloads use the same login. Login attempts are capped at 20 per minute across this personal
+server. No Apache or APK change is required for this update.
+
 ## Git deployment: one installation directory
 
 Use `/opt/rokid-translate` for the checkout and all runtime data:
@@ -157,8 +184,8 @@ nano .env
 
 Paste the first random value into `DEVICE_TOKEN` and the second into `DASHBOARD_TOKEN`.
 Keep `HOST=127.0.0.1`, `PORT=8787`, and `PUBLIC_ORIGIN=https://translate.playground.computer`.
-Do not include a trailing slash in PUBLIC_ORIGIN. Keep the tokens distinct.
-The device token goes in the glasses app's Settings; the dashboard token goes in the browser.
+Do not include a trailing slash in PUBLIC_ORIGIN. Keep the tokens distinct. Also set DASHBOARD_USERNAME and DASHBOARD_PASSWORD (at least 12 characters).
+The device token goes in the glasses app's Settings; set DASHBOARD_USERNAME and DASHBOARD_PASSWORD for browser login. DASHBOARD_TOKEN stays server-side.
 Neither is an OpenAI API key. Add `OPENAI_API_KEY` separately; it stays on this server.
 
 For a quick foreground test:
@@ -234,7 +261,7 @@ the generated TLS site for this subdomain, not your main PHP site. Keep one acti
 for the subdomain. If Certbot chose a certificate directory ending in `-0001`, update the
 certificate paths in the template using `sudo certbot certificates`.
 
-Open **https://translate.playground.computer/**, enter DASHBOARD_TOKEN and press Connect.
+Open **https://translate.playground.computer/**, sign in with DASHBOARD_USERNAME and DASHBOARD_PASSWORD.
 The page uses HTTPS and its live events use WSS through Apache. HTTP alone should redirect to HTTPS.
 Also verify `sudo certbot renew --dry-run` with your existing renewal configuration.
 
@@ -308,7 +335,7 @@ Each session directory under `recordings/` contains:
 - `metadata.json`: session settings, device, timestamps, byte counts and final state.
 
 **Saved sessions** lists the latest 100 sessions. Downloads become available after finalization
-and require DASHBOARD_TOKEN. WAV headers are finalized on stop; a process crash/power loss may
+and require an authenticated browser session. WAV headers are finalized on stop; a process crash/power loss may
 leave an unfinished recording (metadata says incomplete). Downloads are disabled for those files.
 Audio and transcript files persist until you manually remove them. Each audio track is limited to
 256 MiB per session; reaching the limit stops the session with a recording error. At 24 kHz, each
@@ -328,7 +355,7 @@ Official reference: https://developers.openai.com/api/docs/guides/realtime-trans
 
 - **502:** Node isn't running, its port differs, or its service cannot read `.env`. Check systemd logs.
 - **Dashboard page loads but socket fails:** check the two WebSocket ProxyPass rules and Apache version.
-- **Dashboard rejected:** check DASHBOARD_TOKEN and PUBLIC_ORIGIN (including scheme, no trailing slash).
+- **Dashboard login rejected:** check DASHBOARD_USERNAME, DASHBOARD_PASSWORD and PUBLIC_ORIGIN (including scheme, no trailing slash), then restart Node after editing .env.
 - **Glasses HTTP 401:** wrong DEVICE_TOKEN. The browser and glasses deliberately use different tokens.
 - **No microphone level:** permission, audio routing, or firmware; test the local meter before networking.
 - **Connection unavailable during install:** the installer may change Wi-Fi networks. Rejoin the hotspot afterward.

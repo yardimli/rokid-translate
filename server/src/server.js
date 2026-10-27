@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { WebSocketServer, WebSocket } from 'ws';
+import { createDashboardAuth } from './dashboard-auth.js';
 import { createTranslationSession } from './translation.js';
 import { createRecording, listRecordings, recordingFiles } from './recordings.js';
 
@@ -11,13 +12,14 @@ const publicDir = fileURLToPath(new URL('../public/', import.meta.url));
 const safeEqual = (a, b) => typeof a === 'string' && typeof b === 'string' && Buffer.byteLength(a) === Buffer.byteLength(b) && timingSafeEqual(Buffer.from(a), Buffer.from(b));
 const clean = (x, n = 160) => String(x ?? '').replace(/[\x00-\x1f]/g, ' ').slice(0, n);
 
-export function createDiagnosticServer({ deviceToken, dashboardToken, origin, logDir, openaiApiKey = '',
+export function createDiagnosticServer({ deviceToken, dashboardToken, dashboardUsername, dashboardPassword, origin, logDir, openaiApiKey = '',
   recordingsDir, targetLanguage = 'en', translationFactory = createTranslationSession }) {
   for (const token of [deviceToken, dashboardToken]) {
     if (!token || token.length < 24 || token.startsWith('replace-')) throw new Error('Set two random tokens of at least 24 characters in .env');
   }
   if (deviceToken === dashboardToken) throw new Error('Device and dashboard tokens must differ');
   if (!origin || !/^https?:\/\//.test(origin)) throw new Error('PUBLIC_ORIGIN must be your dashboard origin');
+  const auth = createDashboardAuth({ username: dashboardUsername, password: dashboardPassword, secret: dashboardToken, origin });
   const devices = new Map(), dashboards = new Set(), events = [];
   const translations = new Map(), finalizing = new Set();
   const languages = { en: 'English', zh: 'Chinese', ja: 'Japanese', ko: 'Korean', es: 'Spanish', pt: 'Portuguese', fr: 'French', de: 'German', it: 'Italian', ru: 'Russian', hi: 'Hindi', id: 'Indonesian', vi: 'Vietnamese' };
@@ -112,15 +114,16 @@ export function createDiagnosticServer({ deviceToken, dashboardToken, origin, lo
     run.stopping = true;
     if (abort) run.session?.abort(); else run.session?.stop();
   }
-  const server = http.createServer((req, res) => {
+  const server = http.createServer(async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('Content-Security-Policy', "default-src 'self'; connect-src 'self'; style-src 'self'; script-src 'self'; frame-ancestors 'none'");
     const url = new URL(req.url, 'http://localhost');
+    if (await auth.handle(req, res, url.pathname)) return;
     if (req.method !== 'GET') { res.writeHead(405); res.end(); return; }
     if (url.pathname.startsWith('/api/recordings')) {
-      if (!safeEqual(req.headers.authorization, `Bearer ${dashboardToken}`)) { res.writeHead(401); res.end(); return; }
+      if (!auth.session(req)) { res.writeHead(401); res.end(); return; }
       const match = url.pathname.match(/^\/api\/recordings\/([a-f0-9-]{36})\/(input\.wav|translated\.wav|transcripts\.jsonl|source\.txt|translation\.txt|metadata\.json)$/);
       if (!recordingsDir || !match || !recordingFiles.includes(match[2])) { res.writeHead(404); res.end(); return; }
       const info = listRecordings(recordingsDir).find(r => r.id === match[1]);
@@ -146,27 +149,32 @@ export function createDiagnosticServer({ deviceToken, dashboardToken, origin, lo
   server.on('upgrade', (req, socket, head) => {
     const url = new URL(req.url, 'http://localhost');
     const isDevice = url.pathname === '/device';
-    const valid = isDevice ? safeEqual(req.headers.authorization, `Bearer ${deviceToken}`) : url.pathname === '/dashboard' && req.headers.origin === origin;
+    const dashboardSession = isDevice ? null : auth.session(req);
+    const valid = isDevice ? safeEqual(req.headers.authorization, `Bearer ${deviceToken}`) : url.pathname === '/dashboard' && req.headers.origin === origin && dashboardSession;
     if (!valid || wss.clients.size >= 16) { socket.end('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n'); return; }
-    wss.handleUpgrade(req, socket, head, ws => onConnect(ws, isDevice));
+    wss.handleUpgrade(req, socket, head, ws => { if (dashboardSession) auth.attach(dashboardSession, ws); onConnect(ws, isDevice); });
   });
   function onConnect(ws, isDevice) {
     ws.alive = true;
     ws.on('pong', () => { ws.alive = true; });
     ws.on('error', () => {});
-    let authorized = isDevice, d, count = 0, windowStart = Date.now();
-    const authTimer = setTimeout(() => { if (!authorized) ws.close(1008, 'Authentication required'); }, 5000);
+    let d, count = 0, windowStart = Date.now();
     if (isDevice) {
       const id = randomUUID();
       d = { id, ws, connectedAt: new Date().toISOString(), name: 'Connecting', streaming: false, bytes: 0, chunks: 0, rms: 0, sampleRate: 0, lastAudioAt: null };
       devices.set(id, d); log('connected', id); send(ws, { type: 'welcome', deviceId: id, protocolVersion: 1 });
+    }
+    if (!isDevice) {
+      dashboards.add(ws);
+      send(ws, { type: 'snapshot', devices: snapshot(), events }); send(ws, settingsMessage());
+      send(ws, { type: 'recordings', recordings: listRecordings(recordingsDir) });
     }
     ws.on('message', (data, binary) => {
       try {
         if (Date.now() - windowStart >= 1000) { count = 0; windowStart = Date.now(); }
         if (++count > 100) { ws.close(1008, 'Message rate exceeded'); return; }
         if (binary) {
-          if (!authorized || !d?.streaming || data.length === 0 || data.length % 2) { ws.close(1008, 'Audio requires stream_start and PCM16'); return; }
+          if (!d?.streaming || data.length === 0 || data.length % 2) { ws.close(1008, 'Audio requires stream_start and PCM16'); return; }
           d.bytes += data.length; d.chunks++; d.lastAudioAt = new Date().toISOString();
           let sum = 0; for (let i = 0; i < data.length; i += 2) sum += (data.readInt16LE(i) / 32768) ** 2;
           d.rms = Math.sqrt(sum / (data.length / 2));
@@ -177,12 +185,6 @@ export function createDiagnosticServer({ deviceToken, dashboardToken, origin, lo
           return;
         }
         const m = JSON.parse(data.toString());
-        if (!authorized) {
-          if (m.type !== 'auth' || !safeEqual(m.token, dashboardToken)) { ws.close(1008, 'Invalid dashboard token'); return; }
-          authorized = true; clearTimeout(authTimer); dashboards.add(ws);
-          send(ws, { type: 'snapshot', devices: snapshot(), events }); send(ws, settingsMessage());
-          send(ws, { type: 'recordings', recordings: listRecordings(recordingsDir) }); return;
-        }
         if (!isDevice) {
           if (m.type === 'settings') {
             const s = m.settings;
@@ -229,9 +231,10 @@ export function createDiagnosticServer({ deviceToken, dashboardToken, origin, lo
         }
       } catch { ws.close(1008, 'Invalid message'); }
     });
-    ws.on('close', () => { clearTimeout(authTimer); dashboards.delete(ws); if (d) { stopTranslation(d); devices.delete(d.id); log('disconnected', d.id); } });
+    ws.on('close', () => { dashboards.delete(ws); if (d) { stopTranslation(d); devices.delete(d.id); log('disconnected', d.id); } });
   }
   const metrics = setInterval(() => {
+    auth.expire();
     for (const [id, run] of translations) {
       if (!run.stopping && Date.now() - run.lastAudioAt > 5000) {
         run.stopping = true; log('audio_stalled', id); run.session.stop();

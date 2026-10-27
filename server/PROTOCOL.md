@@ -6,8 +6,15 @@ All public connections use TLS. Node itself binds to localhost behind Apache.
 - `GET /healthz`: basic process health, not OpenAI/device health.
 - `GET /api/config`: `Authorization: Bearer DEVICE_TOKEN`; returns relay/recording capabilities, never keys.
 - `WS /device`: same Authorization header. Server assigns a new session/device ID on each connection.
-- `WS /dashboard`: browser Origin must equal PUBLIC_ORIGIN; first JSON message within 5 seconds
-  must be `{"type":"auth","token":"DASHBOARD_TOKEN"}`. Tokens are not placed in URLs or logged.
+- `POST /api/login`: same-origin JSON `{username,password}` matching DASHBOARD_USERNAME/PASSWORD.
+  Sets an HttpOnly, SameSite=Strict cookie (Secure + __Host- prefix on HTTPS); credentials are not logged.
+- `GET /api/session`: 200 for an authenticated session, otherwise 401.
+- `POST /api/logout`: same-origin; revokes the cookie/session and closes its dashboard sockets.
+- `WS /dashboard`: browser Origin must equal PUBLIC_ORIGIN and a valid session cookie is required
+  at upgrade. Snapshot/settings/recordings are sent immediately; no token auth message is used.
+  DASHBOARD_TOKEN signs opaque sessions on the server and is never returned to the browser.
+  Sessions expire after 8 hours and are invalidated by server restart. Login is limited to
+  20 attempts per minute globally for this single-user application.
 
 Device sends JSON `hello` with `name` and `appVersion`, then `stream_start` with
 `sampleRate` (16000/24000/44100/48000), `channels:1`, `format:"pcm16le"` before binary audio frames.
@@ -39,7 +46,7 @@ deltas are persisted separately. `caption` events with `live:true` carry a rolli
 `translation_status` reports upstream lifecycle/errors. Captions remain compatible with older APKs.
 
 `recordings` requests/responses list session metadata. `GET /api/recordings/{id}/{file}` requires
-Bearer DASHBOARD_TOKEN and a finalized session; the server allows only its recording filenames.
+a valid dashboard session cookie and a finalized recording; the server allows only its recording filenames.
 Files never live under the public directory. Audio and text are recorded only while translation is active.
 
 OpenAI leg: WSS `/v1/realtime/translations?model=gpt-realtime-translate`, Bearer OPENAI_API_KEY.

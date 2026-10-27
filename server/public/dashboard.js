@@ -1,5 +1,5 @@
 const $ = id => document.getElementById(id);
-let socket, events = [], deviceCache = [], authenticatedToken = '';
+let socket, events = [], deviceCache = [];
 function status(text) { $('status').textContent = text; }
 function renderEvents() { $('events').textContent = events.map(e => JSON.stringify(e)).join('\n'); $('events').scrollTop = $('events').scrollHeight; }
 function renderDevices(devices) {
@@ -51,7 +51,7 @@ function renderRecordings(recordings) {
       button.onclick = async () => {
         button.disabled = true;
         try {
-          const response = await fetch(`/api/recordings/${r.id}/${file}`, { headers: { Authorization: `Bearer ${authenticatedToken}` } });
+          const response = await fetch(`/api/recordings/${r.id}/${file}`);
           if (!response.ok) throw new Error(`Download failed (${response.status})`);
           const url = URL.createObjectURL(await response.blob());
           const link = document.createElement('a'); link.href = url; link.download = `${r.id}-${file}`; link.click();
@@ -67,16 +67,14 @@ $('apply').onclick = () => send({ type: 'settings', settings: {
   sourceTranscript: $('sourceTranscript').checked, fontSize: Number($('fontSize').value), captionChars: Number($('captionChars').value)
 } });
 $('refreshRecordings').onclick = () => send({ type: 'recordings' });
-$('connect').onclick = () => {
+function connectDashboard() {
   socket?.close();
   const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/dashboard`); socket = ws;
   status('Connecting…');
-  const token = $('token').value.trim();
-  ws.onopen = () => ws.send(JSON.stringify({ type: 'auth', token }));
   ws.onmessage = event => {
     if (socket !== ws) return;
     const m = JSON.parse(event.data);
-    if (m.type === 'snapshot') { authenticatedToken = token; status('Connected'); events = m.events; renderDevices(m.devices); renderEvents(); }
+    if (m.type === 'snapshot') { status('Connected'); events = m.events; renderDevices(m.devices); renderEvents(); }
     if (m.type === 'settings') { renderSettings(m); status('Connected · settings loaded'); }
     if (m.type === 'recordings') renderRecordings(m.recordings);
     if (m.type === 'transcript') { const d = deviceCache.find(d => d.id === m.deviceId); if (d) d[m.kind] = m.text; renderText(); }
@@ -84,9 +82,10 @@ $('connect').onclick = () => {
     if (m.type === 'event') { events.push(m.event); events = events.slice(-500); renderEvents(); }
     if (m.type === 'error') status(m.message);
   };
-  ws.onclose = e => { if (socket === ws) { status(`Disconnected (${e.code})${e.reason ? ': ' + e.reason : ''}`); renderDevices([]); } };
+  ws.onclose = e => { if (socket === ws) { status(`Disconnected (${e.code})${e.reason ? ': ' + e.reason : ''}`); renderDevices([]); fetch('/api/session').then(r => { if (socket === ws && r.status === 401) { showLogin(); status('Session expired. Sign in again.'); } }).catch(() => {}); } };
   ws.onerror = () => { if (socket === ws) status('Connection failed; check Apache, SSL and server logs.'); };
-};
+}
+$('connect').onclick = connectDashboard;
 $('disconnect').onclick = () => socket?.close();
 $('send').onclick = () => {
   if (socket?.readyState !== WebSocket.OPEN) { status('Connect first.'); return; }
@@ -96,3 +95,34 @@ $('download').onclick = () => {
   const url = URL.createObjectURL(new Blob([events.map(e => JSON.stringify(e)).join('\n')], { type: 'application/x-ndjson' }));
   const link = document.createElement('a'); link.href = url; link.download = 'rokid-events.jsonl'; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
 };
+
+function showLogin() {
+  const previous = socket; socket = null; previous?.close();
+  $('loginPanel').hidden = false; $('dashboard').hidden = true;
+  events = []; renderEvents(); renderDevices([]); $('recordings').replaceChildren();
+}
+async function restoreSession() {
+  try {
+    const response = await fetch('/api/session');
+    if (response.ok) { $('loginPanel').hidden = true; $('dashboard').hidden = false; connectDashboard(); }
+    else { showLogin(); status('Sign in to view your glasses and recordings.'); }
+  } catch { showLogin(); status('Cannot reach the server. Try signing in again.'); }
+}
+$('loginForm').onsubmit = async event => {
+  event.preventDefault(); $('login').disabled = true;
+  try {
+    const response = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: $('username').value, password: $('password').value }) });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'Sign in failed');
+    $('password').value = ''; $('loginPanel').hidden = true; $('dashboard').hidden = false; connectDashboard();
+  } catch (error) { status(error.message); } finally { $('login').disabled = false; }
+};
+$('logout').onclick = async () => {
+  try {
+    const response = await fetch('/api/logout', { method: 'POST' });
+    if (!response.ok) throw new Error('Sign out failed. Try again.');
+    showLogin(); status('Signed out.');
+  } catch (error) { status(error.message); }
+};
+restoreSession();

@@ -19,7 +19,7 @@ availability must be verified on the glasses.
 - Dashboard controls target language, source transcription, noise reduction, caption length and font size.
 - Live source and translated text appear in the dashboard; translation streams to the glasses.
 - Each translation session saves input/translated WAV audio, plain-text transcripts and timestamped transcript deltas.
-  Files are private, downloadable with the dashboard token, and retained until manually removed.
+  Files are private, downloadable after dashboard login, and retained until manually removed.
 - Diagnostic logs omit transcript content and credentials. Translation is off until enabled in the dashboard.
 
 ## Build on Windows
@@ -84,7 +84,7 @@ Copy-Item .env.example .env
 npm start
 ```
 
-Open `http://localhost:8787`, enter DASHBOARD_TOKEN, connect. App Settings uses DEVICE_TOKEN.
+Open `http://localhost:8787`, sign in using DASHBOARD_USERNAME and DASHBOARD_PASSWORD from `.env`. App Settings uses DEVICE_TOKEN.
 You can test the server/dashboard without any Android device by running, in a second terminal:
 
 ```powershell
@@ -96,6 +96,13 @@ to `https://translate.playground.computer` to run that same test against your de
 Do not confuse emulator host alias `10.0.2.2` with the browser's `localhost` origin.
 Native button/touch mappings, optical layout, sleep and mic routing still need device tests.
 The foreground Activity keeps the screen awake while visible; this is not a battery benchmark.
+
+## Dashboard login
+
+Set `DASHBOARD_USERNAME` and `DASHBOARD_PASSWORD` (at least 12 characters) in the server's
+`.env` before deploying. Keep the existing `DASHBOARD_TOKEN` as the server-only session signing
+secret. The browser uses a login form and an HTTP-only session cookie; there is no token field.
+The glasses still use `DEVICE_TOKEN`. Sessions expire after 8 hours or a server restart.
 
 ## Ubuntu deployment
 
