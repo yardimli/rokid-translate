@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Rokid · Translation lab</title><link rel="stylesheet" href="/style.css"></head>
+<body><main>
+<header><span class="eyebrow">ROKID / LIVE TRANSLATION</span><h1>Translation lab</h1><p>Live captions from your glasses. Translation sessions save input audio, translated audio and transcripts on this server.</p></header>
+<section class="connection"><label>Dashboard token<input id="token" type="password" autocomplete="off" placeholder="From your server .env"></label><button id="connect">Connect</button><button id="disconnect">Disconnect</button><span id="status" role="status">Disconnected</span></section>
+<section><h2>Connected glasses</h2><div id="devices">Connect to view devices.</div></section>
+<section><h2>Translation settings</h2><p id="apiState">Connect to load settings.</p><p>Model: <strong>gpt-realtime-translate</strong> · Source language: automatic</p>
+<div class="settings-grid">
+<label>Target language<select id="language"><option value="en">English</option></select></label>
+<label>Noise reduction<select id="noise"><option value="off">Off</option><option value="near_field">Near field · your voice</option><option value="far_field">Far field · people nearby</option></select></label>
+<label>Glasses text size<select id="fontSize"><option>22</option><option selected>26</option><option>30</option><option>34</option></select></label>
+<label>Rolling caption length<select id="captionChars"><option value="120">120 characters</option><option value="240" selected>240 characters</option><option value="400">400 characters</option></select></label>
+</div><label class="check"><input type="checkbox" id="sourceTranscript" checked> Include source transcript (gpt-realtime-whisper; additional API usage)</label>
+<label class="check"><input type="checkbox" id="enabled"> Enable translation for connected streaming glasses</label>
+<button id="apply">Apply settings</button><p class="muted">Disable and Apply to finish a session before changing its settings. Settings reset when Node restarts. Stop the microphone to finish recording; disconnecting the dashboard does not stop the glasses.</p></section>
+<section><h2>Live text</h2><p class="muted">Mirrors the selected device below. Latest 6,000 characters; full deltas are saved with the recording.</p><h3>Translation</h3><div id="translation" class="transcript" aria-live="polite" dir="auto">Waiting for translation…</div><h3>Source</h3><div id="source" class="transcript source" dir="auto">Waiting for speech…</div></section>
+<section><h2>Send a display test</h2><label>Device<select id="device"></select></label><label>Caption<textarea id="caption" maxlength="400" rows="3">Hello from Ubuntu. 你好，眼镜！</textarea></label><button id="send">Send caption</button><p class="muted">An acknowledgement means the app applied the text; it does not verify optical visibility.</p></section>
+<section><div class="heading"><h2>Session events</h2><button id="download">Download visible logs</button></div><pre id="events" aria-live="off"></pre></section>
+<section><div class="heading"><h2>Saved sessions</h2><button id="refreshRecordings">Refresh</button></div><p class="muted">Stop translation to finalize WAV files and enable downloads. Files remain on Ubuntu until you remove them.</p><div id="recordings">Connect to view recordings.</div></section>
+</main><script src="/dashboard.js"></script></body></html>

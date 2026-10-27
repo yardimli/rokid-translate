@@ -1,0 +1,22 @@
+[Unit]
+Description=Rokid microphone and caption diagnostic server
+After=network.target
+
+[Service]
+Type=simple
+User=rokid-test
+Group=rokid-test
+WorkingDirectory=/opt/rokid-test
+ExecStart=/usr/bin/node --env-file=/opt/rokid-test/.env /opt/rokid-test/src/index.js
+Restart=on-failure
+RestartSec=3
+Environment=NODE_ENV=production
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/rokid-test/logs /opt/rokid-test/recordings
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

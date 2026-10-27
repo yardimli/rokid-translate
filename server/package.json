@@ -1,0 +1,12 @@
+{
+  "name": "rokid-translate-test-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "start": "node --env-file=.env src/index.js",
+    "test": "node --test"
+  },
+  "dependencies": { "ws": "^8.18.3" }
+}

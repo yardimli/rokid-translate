@@ -1,0 +1,14 @@
+.tools/
+.gradle/
+**/build/
+local.properties
+bootstrap.properties
+.idea/
+*.iml
+server/node_modules/
+server/.env
+server/logs/
+server/recordings/
+dist/
+*.jks
+*.keystore
