@@ -25,7 +25,10 @@ First commit and push the latest deployment changes from Windows, then pull them
 already cloned `/opt/rokid-translate` checkout. Run Git and the update script as the normal
 SSH user who owns that checkout, not as root. If needed, configure a read-only GitHub deploy
 key for a private repository. Node 22+ must be installed at `/usr/bin/node`; npm, curl, Git,
-and sudo access are required.
+and non-interactive sudo access are required. The script uses `sudo -n` for privileged
+commands and does not run `sudo -v`. It never asks for a password. If sudo authorization
+is unavailable it fails rather than prompting; an administrator must then review the account
+permissions. Run the script without a leading `sudo` so Git/npm remain under your SSH user.
 
 Stop the microphone and service before copying recordings so files are not changing:
 
