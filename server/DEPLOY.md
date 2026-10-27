@@ -1,10 +1,109 @@
-# Ubuntu: FTP upload, Apache SSL, and an always-running Node.js service
+# Ubuntu deployment: Git updates, Apache SSL, and systemd
 
-This is a standalone upload package. No Git checkout or Android files are needed on Ubuntu.
+The recommended update workflow uses a Git checkout and the update script below.
+The original FTP instructions remain available for initial setup and standalone uploads.
 Node receives live PCM, relays it to OpenAI when enabled, and records translation sessions locally.
 The dashboard is served by this same process. Apache handles the public domain and certificate.
 PHP can remain on your existing main-domain virtual host. A conventional PHP request is not the
 persistent WebSocket worker we need; using Node behind Apache avoids changing your PHP setup.
+
+## Git deployment for your existing server
+
+This migrates the existing FTP installation at `/opt/rokid-test`. Keep the running service,
+`.env`, tokens, logs, and recordings there. The checkout is separate and is never served as
+an Apache DocumentRoot. The script deploys only the Node server; Android Studio/Java and APK
+builds are not needed on Ubuntu. The dashboard is plain HTML/CSS/JavaScript, so there is no
+frontend compilation step: `npm ci --omit=dev` plus tests prepare the release.
+
+### One-time migration
+
+First commit and push the repository changes from Windows so the server can pull them.
+Install Git and curl if needed (`sudo apt install git curl`). Use a system installation of
+Node 22+ at `/usr/bin/node`, npm, and an SSH user with sudo access. Your existing Apache SSL
+site and `rokid-test` systemd service must already be working.
+
+Run as your normal SSH user, not in a root shell:
+
+```bash
+sudo install -d -m 755 -o "$USER" -g "$(id -gn)" /opt/rokid-translate
+git clone https://github.com/yardimli/rokid-translate.git /opt/rokid-translate
+cd /opt/rokid-translate
+bash server/deploy/update.sh
+```
+
+If the repository is private, configure Git authentication first, preferably a read-only
+GitHub deploy key and the SSH URL `git@github.com:yardimli/rokid-translate.git`. Do not put a
+GitHub token in the URL or commit `.env`. The clone directory must be empty initially. Use
+an existing checkout instead if you have already cloned it.
+
+The script preserves `/opt/rokid-test/.env` and state directories. It installs the repository's
+systemd unit with `ExecStart` pointing to `/opt/rokid-test/current/src/index.js`, while keeping
+`WorkingDirectory=/opt/rokid-test` so relative logs/recordings paths still work. The previous
+unit is backed up in the new release's `deploy-backup/` directory. Review any custom service
+unit settings before migration: the base unit is replaced, not merged. Custom systemd drop-ins
+remain in effect. Use the standard `LOG_DIR` and `RECORDINGS_DIR` locations; the script rejects
+custom paths that would conflict with the unit's writable-directory restrictions.
+
+### Every update
+
+After changes have been committed and pushed:
+
+```bash
+cd /opt/rokid-translate
+bash server/deploy/update.sh
+```
+
+This performs a fast-forward-only `git pull` on the checkout's current branch/upstream,
+then runs the newly pulled script. It refuses a dirty checkout rather than discarding edits.
+If you have already run `git pull`, use `bash server/deploy/update.sh --no-pull`.
+
+The script validates the installed environment, checks Apache syntax, installs dependencies
+and runs tests in a temporary directory, then copies a new release under
+`/opt/rokid-test/releases/`. The old service continues running during preparation. It switches
+`current` atomically, reloads systemd and restarts Node, checks localhost health, reloads Apache,
+and checks the local HTTPS vhost with certificate verification. Failure during activation
+attempts to restore the old symlink, service unit, and Apache config and restart them. On the
+first migration, rollback uses the original FTP files and service unit. Check the printed
+result and journal after a rollback; restoration is not a guarantee if the underlying server
+is broken. Git stays at the newly pulled commit; runtime rollback does not reset the checkout.
+
+A restart ends active translation sessions. Stop the microphone first; after deployment,
+reload the dashboard, reconnect, and enable translation again. Tokens and saved sessions stay
+in place. Old releases are retained for recovery and are not automatically deleted.
+
+### Updating Apache configuration from Git
+
+Ordinary updates preserve the installed virtual hosts and only syntax-check/reload Apache.
+When you intentionally want the repository's SSL proxy template installed as well:
+
+```bash
+bash server/deploy/update.sh --update-apache
+```
+
+This replaces **only** `/etc/apache2/sites-available/translate-ssl.conf`, and only if that file
+already exists and is enabled at `/etc/apache2/sites-enabled/translate-ssl.conf`. It backs up
+the file first and validates configuration before reload. It does not edit the main PHP site,
+HTTP redirect site, certificate files, or Certbot renewal configuration. Certificate issuance
+and renewal remain Certbot's responsibility.
+
+If you currently use a Certbot-generated filename or custom certificate path, keep using the
+default update command until you review/adapt the template and complete the site setup in
+section 3 below. The provided template uses the certificate directory
+`/etc/letsencrypt/live/translate.playground.computer/` and Apache 2.4.47+ proxy directives.
+Do not enable a second TLS site for the same domain. The HTTPS health check assumes Apache
+also listens on loopback port 443 and uses the domain's valid certificate.
+
+Useful checks after deployment:
+
+```bash
+sudo systemctl status rokid-test --no-pager
+sudo journalctl -u rokid-test -n 50 --no-pager
+curl --fail https://translate.playground.computer/healthz
+sudo readlink /opt/rokid-test/current
+```
+
+Do not mix later FTP updates with Git-managed releases: after migration the service executes
+`current/src/index.js`, not the original `/opt/rokid-test/src/index.js`.
 
 ## 1. Upload and install
 
@@ -123,7 +222,7 @@ Also verify `sudo certbot renew --dry-run` with your existing renewal configurat
 ## 4. Device test
 
 In the APK's Settings, set `https://translate.playground.computer` and DEVICE_TOKEN.
-Connect the glasses to the iPhone Wi-Fi hotspot. Press Connect server, then Start microphone.
+Configure the glasses network through Hi Rokid (for example, an Android phone hotspot). Press Connect server, then Start microphone.
 The dashboard should list the glasses and show increasing bytes/chunks and changing audio levels.
 Send a caption from the dashboard; check both the glasses and a `caption_applied` event.
 The acknowledgement verifies that the app assigned the text, not that the optics displayed it.

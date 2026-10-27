@@ -99,10 +99,21 @@ The foreground Activity keeps the screen awake while visible; this is not a batt
 
 ## Ubuntu deployment
 
-Upload **only `server/`** (without node_modules/logs/recordings/.env) using FTP. Follow
-[server/DEPLOY.md](server/DEPLOY.md) for npm, a systemd service, and a dedicated Apache/Certbot virtual
-host at `translate.playground.computer`. Your main PHP site is unaffected.
-The server dashboard is served at the subdomain root. No PHP installation changes are required.
+For the existing Ubuntu installation, clone this repository separately into
+`/opt/rokid-translate`, then run:
+
+```bash
+cd /opt/rokid-translate
+bash server/deploy/update.sh
+```
+
+The script pulls committed changes, installs dependencies, runs tests, activates a new server
+release, restarts systemd, validates/reloads Apache and checks HTTPS health. It keeps the installed
+`.env`, logs and recordings at `/opt/rokid-test`. Use `--update-apache` only when also deploying
+the repository's existing translation SSL vhost template. The main PHP site stays untouched.
+See [server/DEPLOY.md](server/DEPLOY.md) for the one-time Git migration, authentication,
+requirements, rollback behavior, and the original standalone FTP installation instructions.
+No Android build runs on Ubuntu. Changes must be committed and pushed before the server pulls them.
 
 ## Validation
 
