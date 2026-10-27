@@ -6,10 +6,10 @@ import { healthyResponse } from '../deploy/check-health.mjs';
 const valid = () => ({ DEVICE_TOKEN: 'd'.repeat(32), DASHBOARD_TOKEN: 'b'.repeat(32), PUBLIC_ORIGIN: 'https://translate.playground.computer' });
 test('deployment accepts existing default state paths and optional OpenAI key', () => {
   assert.doesNotThrow(() => validateDeployment(valid()));
-  assert.doesNotThrow(() => validateDeployment({ ...valid(), RECORDINGS_DIR: '/opt/rokid-test/recordings', LOG_DIR: './logs' }));
+  assert.doesNotThrow(() => validateDeployment({ ...valid(), RECORDINGS_DIR: '/opt/rokid-translate/server/recordings', LOG_DIR: './logs' }));
 });
 test('deployment rejects incompatible service/proxy settings without disclosing values', () => {
-  for (const override of [{ PORT: '9999' }, { HOST: '0.0.0.0' }, { PUBLIC_ORIGIN: 'https://wrong.example' }, { RECORDINGS_DIR: '/private/path' }, { LOG_DIR: '../logs' }]) {
+  for (const override of [{ PORT: '9999' }, { HOST: '0.0.0.0' }, { PUBLIC_ORIGIN: 'https://wrong.example' }, { RECORDINGS_DIR: '/private/path' }, { LOG_DIR: '../logs' }, { RECORDINGS_DIR: '/opt/rokid-test/recordings' }]) {
     assert.throws(() => validateDeployment({ ...valid(), ...override }));
   }
   assert.throws(() => validateDeployment({ ...valid(), DEVICE_TOKEN: 'private-token' }), error => !error.message.includes('private-token'));

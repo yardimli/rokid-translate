@@ -7,103 +7,119 @@ The dashboard is served by this same process. Apache handles the public domain a
 PHP can remain on your existing main-domain virtual host. A conventional PHP request is not the
 persistent WebSocket worker we need; using Node behind Apache avoids changing your PHP setup.
 
-## Git deployment for your existing server
+## Git deployment: one installation directory
 
-This migrates the existing FTP installation at `/opt/rokid-test`. Keep the running service,
-`.env`, tokens, logs, and recordings there. The checkout is separate and is never served as
-an Apache DocumentRoot. The script deploys only the Node server; Android Studio/Java and APK
-builds are not needed on Ubuntu. The dashboard is plain HTML/CSS/JavaScript, so there is no
-frontend compilation step: `npm ci --omit=dev` plus tests prepare the release.
+Use `/opt/rokid-translate` for the checkout and all runtime data:
 
-### One-time migration
+- `server/.env`: existing tokens, OpenAI key, and environment settings.
+- `server/logs/` and `server/recordings/`: persistent data, ignored by Git.
+- `.deploy/releases/` and `.deploy/current`: tested releases and active symlink, ignored by Git.
 
-First commit and push the repository changes from Windows so the server can pull them.
-Install Git and curl if needed (`sudo apt install git curl`). Use a system installation of
-Node 22+ at `/usr/bin/node`, npm, and an SSH user with sudo access. Your existing Apache SSL
-site and `rokid-test` systemd service must already be working.
+The existing systemd service and account remain named `rokid-test`; no second service is created.
+The script replaces its unit so all runtime paths point inside `/opt/rokid-translate`.
+Apache continues proxying to localhost:8787, so migration requires no vhost changes.
 
-Run as your normal SSH user, not in a root shell:
+### Migrate the existing `/opt/rokid-test` installation
+
+First commit and push the latest deployment changes from Windows, then pull them into your
+already cloned `/opt/rokid-translate` checkout. Run Git and the update script as the normal
+SSH user who owns that checkout, not as root. If needed, configure a read-only GitHub deploy
+key for a private repository. Node 22+ must be installed at `/usr/bin/node`; npm, curl, Git,
+and sudo access are required.
+
+Stop the microphone and service before copying recordings so files are not changing:
 
 ```bash
-sudo install -d -m 755 -o "$USER" -g "$(id -gn)" /opt/rokid-translate
-git clone https://github.com/yardimli/rokid-translate.git /opt/rokid-translate
+cd /opt/rokid-translate
+git pull --ff-only
+sudo systemctl stop rokid-test
+sudo cp -a /opt/rokid-test/.env server/.env
+sudo mkdir -p server/logs server/recordings
+sudo cp -a /opt/rokid-test/logs/. server/logs/
+sudo cp -a /opt/rokid-test/recordings/. server/recordings/
+sudo chown root:rokid-test server/.env
+sudo chmod 640 server/.env
+sudo chown -R rokid-test:rokid-test server/logs server/recordings
+sudo chmod 700 server/logs server/recordings
+```
+
+Skip a copy command if that old data directory does not exist. These commands copy only
+settings and runtime data, not the old source or node_modules. Use them once, before the new
+installation starts recording. Do not repeat the migration copy over newer recordings/settings.
+
+Check `server/.env` using `sudo nano server/.env`. Keep the existing credentials. If LOG_DIR
+or RECORDINGS_DIR contain absolute `/opt/rokid-test/...` paths, change them to `./logs` and
+`./recordings`. Keep HOST=127.0.0.1, PORT=8787, and
+PUBLIC_ORIGIN=https://translate.playground.computer. Then deploy:
+
+```bash
+bash server/deploy/update.sh --no-pull
+sudo systemctl status rokid-test --no-pager
+sudo systemctl show rokid-test -p WorkingDirectory -p ExecStart -p ReadWritePaths
+curl --fail https://translate.playground.computer/healthz
+```
+
+The displayed service paths must all use `/opt/rokid-translate`. Also open the dashboard,
+check saved recordings, and test translation before removing the old directory. If deployment
+fails, keep `/opt/rokid-test`: the previous unit is restored and you can restart it with
+`sudo systemctl start rokid-test`. Custom systemd drop-ins are rejected because they may
+still override the service with old paths; review them before migration.
+
+Only after the above checks succeed, remove the old installation:
+
+```bash
+sudo rm -r -- /opt/rokid-test
+```
+
+This deletes the old copy of settings/recordings too. The new copies remain in `server/`.
+Do not uninstall the `rokid-test` service or account: they now run the new location. Old
+migration backups refer to the deleted installation and cannot restore it after deletion.
+
+### Future updates
+
+```bash
 cd /opt/rokid-translate
 bash server/deploy/update.sh
 ```
 
-If the repository is private, configure Git authentication first, preferably a read-only
-GitHub deploy key and the SSH URL `git@github.com:yardimli/rokid-translate.git`. Do not put a
-GitHub token in the URL or commit `.env`. The clone directory must be empty initially. Use
-an existing checkout instead if you have already cloned it.
+The script performs a fast-forward-only Git pull and executes the newly pulled script. It
+refuses local changes rather than overwriting them. Use `--no-pull` if you already pulled.
+It installs dependencies and runs tests in a temporary directory, prepares a release inside
+`.deploy/releases`, switches `.deploy/current`, and restarts the service. The dashboard is
+plain HTML/CSS/JavaScript: no frontend compilation or Android build is needed on Ubuntu.
 
-The script preserves `/opt/rokid-test/.env` and state directories. It installs the repository's
-systemd unit with `ExecStart` pointing to `/opt/rokid-test/current/src/index.js`, while keeping
-`WorkingDirectory=/opt/rokid-test` so relative logs/recordings paths still work. The previous
-unit is backed up in the new release's `deploy-backup/` directory. Review any custom service
-unit settings before migration: the base unit is replaced, not merged. Custom systemd drop-ins
-remain in effect. Use the standard `LOG_DIR` and `RECORDINGS_DIR` locations; the script rejects
-custom paths that would conflict with the unit's writable-directory restrictions.
+Environment validation, Apache syntax checking, localhost health, and local HTTPS vhost
+health are checked. Failures during activation attempt to restore the previous release/unit
+and Apache config. The prior running/stopped service state is restored on failure. Check the
+journal after a rollback; underlying server failures can also prevent recovery. Git stays
+on the pulled commit. Releases and configuration backups are retained under `.deploy`.
 
-### Every update
+`.env`, logs, and recordings are never overwritten by routine updates. A restart ends active
+sessions; stop the microphone first, then reload the dashboard and enable translation again.
 
-After changes have been committed and pushed:
-
-```bash
-cd /opt/rokid-translate
-bash server/deploy/update.sh
-```
-
-This performs a fast-forward-only `git pull` on the checkout's current branch/upstream,
-then runs the newly pulled script. It refuses a dirty checkout rather than discarding edits.
-If you have already run `git pull`, use `bash server/deploy/update.sh --no-pull`.
-
-The script validates the installed environment, checks Apache syntax, installs dependencies
-and runs tests in a temporary directory, then copies a new release under
-`/opt/rokid-test/releases/`. The old service continues running during preparation. It switches
-`current` atomically, reloads systemd and restarts Node, checks localhost health, reloads Apache,
-and checks the local HTTPS vhost with certificate verification. Failure during activation
-attempts to restore the old symlink, service unit, and Apache config and restart them. On the
-first migration, rollback uses the original FTP files and service unit. Check the printed
-result and journal after a rollback; restoration is not a guarantee if the underlying server
-is broken. Git stays at the newly pulled commit; runtime rollback does not reset the checkout.
-
-A restart ends active translation sessions. Stop the microphone first; after deployment,
-reload the dashboard, reconnect, and enable translation again. Tokens and saved sessions stay
-in place. Old releases are retained for recovery and are not automatically deleted.
-
-### Updating Apache configuration from Git
-
-Ordinary updates preserve the installed virtual hosts and only syntax-check/reload Apache.
-When you intentionally want the repository's SSL proxy template installed as well:
+### Optional Apache configuration update
 
 ```bash
 bash server/deploy/update.sh --update-apache
 ```
 
-This replaces **only** `/etc/apache2/sites-available/translate-ssl.conf`, and only if that file
-already exists and is enabled at `/etc/apache2/sites-enabled/translate-ssl.conf`. It backs up
-the file first and validates configuration before reload. It does not edit the main PHP site,
-HTTP redirect site, certificate files, or Certbot renewal configuration. Certificate issuance
-and renewal remain Certbot's responsibility.
+Ordinary updates only validate/reload existing Apache configuration. This option additionally
+replaces `/etc/apache2/sites-available/translate-ssl.conf` from the repository, only if it
+already exists and is enabled under that filename. It backs it up before replacement and
+validates before reload. The main PHP site, HTTP redirect, certificates, and Certbot renewal
+configuration are untouched. Do not enable duplicate TLS vhosts for the same domain.
 
-If you currently use a Certbot-generated filename or custom certificate path, keep using the
-default update command until you review/adapt the template and complete the site setup in
-section 3 below. The provided template uses the certificate directory
-`/etc/letsencrypt/live/translate.playground.computer/` and Apache 2.4.47+ proxy directives.
-Do not enable a second TLS site for the same domain. The HTTPS health check assumes Apache
-also listens on loopback port 443 and uses the domain's valid certificate.
+For a Certbot-generated filename or custom certificate directory, keep using the default
+command until you adapt the template/site setup. The template expects Apache 2.4.47+ and
+`/etc/letsencrypt/live/translate.playground.computer/`. HTTPS verification checks this server
+via loopback:443 with the domain's valid certificate, without bypassing certificate checks.
 
-Useful checks after deployment:
+## Legacy FTP setup reference
 
-```bash
-sudo systemctl status rokid-test --no-pager
-sudo journalctl -u rokid-test -n 50 --no-pager
-curl --fail https://translate.playground.computer/healthz
-sudo readlink /opt/rokid-test/current
-```
-
-Do not mix later FTP updates with Git-managed releases: after migration the service executes
-`current/src/index.js`, not the original `/opt/rokid-test/src/index.js`.
+The sections below describe the original `/opt/rokid-test` installation. After migrating,
+use the Git workflow above; do not copy updates into the old directory or reinstall the old
+`rokid-test.service` template. Git deployment uses `rokid-translate.service`, installed under
+the existing systemd unit name `rokid-test.service`.
 
 ## 1. Upload and install
 

@@ -9,8 +9,8 @@ export function validateDeployment(env) {
   if (env.PUBLIC_ORIGIN !== 'https://translate.playground.computer') throw new Error('PUBLIC_ORIGIN must match the deployment domain');
   if ((env.HOST || '127.0.0.1') !== '127.0.0.1' || Number(env.PORT || 8787) !== 8787) throw new Error('Deployment requires HOST=127.0.0.1 and PORT=8787');
   for (const [key, directory] of [['LOG_DIR', 'logs'], ['RECORDINGS_DIR', 'recordings']]) {
-    if (env[key] && ![directory, `./${directory}`, `/opt/rokid-test/${directory}`].includes(env[key])) {
-      throw new Error(`${key} must use the standard /opt/rokid-test state directory for this deployment script`);
+    if (env[key] && ![directory, `./${directory}`, `/opt/rokid-translate/server/${directory}`].includes(env[key])) {
+      throw new Error(`${key} must use the standard /opt/rokid-translate/server state directory for this deployment script`);
     }
   }
 }

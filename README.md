@@ -99,7 +99,7 @@ The foreground Activity keeps the screen awake while visible; this is not a batt
 
 ## Ubuntu deployment
 
-For the existing Ubuntu installation, clone this repository separately into
+For the existing Ubuntu installation, clone this repository into
 `/opt/rokid-translate`, then run:
 
 ```bash
@@ -108,8 +108,8 @@ bash server/deploy/update.sh
 ```
 
 The script pulls committed changes, installs dependencies, runs tests, activates a new server
-release, restarts systemd, validates/reloads Apache and checks HTTPS health. It keeps the installed
-`.env`, logs and recordings at `/opt/rokid-test`. Use `--update-apache` only when also deploying
+release, restarts systemd, validates/reloads Apache and checks HTTPS health. All files stay inside `/opt/rokid-translate`: `.env`, logs and recordings live under `server/`,
+with tested releases under the ignored `.deploy/` directory. Use `--update-apache` only when also deploying
 the repository's existing translation SSL vhost template. The main PHP site stays untouched.
 See [server/DEPLOY.md](server/DEPLOY.md) for the one-time Git migration, authentication,
 requirements, rollback behavior, and the original standalone FTP installation instructions.

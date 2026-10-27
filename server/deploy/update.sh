@@ -9,7 +9,7 @@ for arg in "$@"; do
     --update-apache) update_apache=true ;;
     --help|-h)
       echo 'Usage: bash server/deploy/update.sh [--no-pull] [--update-apache]'
-      echo 'Updates existing /opt/rokid-test; preserves .env, logs and recordings.'
+      echo 'Deploys within /opt/rokid-translate; state is kept in server/.'
       echo '--update-apache replaces the already-enabled translate-ssl.conf template only.'
       exit 0 ;;
     *) echo "Unknown option: $arg" >&2; exit 2 ;;
@@ -34,20 +34,26 @@ fi
 exec 9>"$(git rev-parse --git-path rokid-deploy.lock)"
 flock -n 9 || fail 'Another deployment from this checkout is running.'
 sudo -v
-root=/opt/rokid-test
+[[ $repo == /opt/rokid-translate ]] || fail 'Clone this checkout at /opt/rokid-translate (the service uses this path).'
+root="$repo/.deploy"
+state="$repo/server"
 unit=/etc/systemd/system/rokid-test.service
 site=/etc/apache2/sites-available/translate-ssl.conf
-sudo test -f "$root/.env" || fail "Existing $root/.env is required; see DEPLOY.md."
+sudo test -f "$state/.env" || fail "Existing $state/.env is required; see DEPLOY.md."
 sudo test -f "$unit" || fail 'Existing rokid-test.service is required.'
 id rokid-test >/dev/null || fail 'Existing rokid-test service account is required.'
-sudo systemctl is-active --quiet rokid-test || fail 'Start/fix the existing service before migrating or updating.'
+was_active=false
+if sudo systemctl is-active --quiet rokid-test; then was_active=true; fi
+sudo -u rokid-test test -w "$state/logs" || fail 'Service needs write access to server/logs; see migration instructions.'
+sudo -u rokid-test test -w "$state/recordings" || fail 'Service needs write access to server/recordings; see migration instructions.'
+[[ -z $(sudo systemctl show -p DropInPaths --value rokid-test) ]] || fail 'Custom systemd drop-ins exist; review/remove old path overrides before migrating.'
 sudo apache2ctl configtest
 if $update_apache; then
   sudo test -f "$site" || fail 'translate-ssl.conf must already exist; see DEPLOY.md for customized/Certbot sites.'
   sudo test /etc/apache2/sites-enabled/translate-ssl.conf -ef "$site" || fail 'translate-ssl.conf must already be enabled.'
 fi
 # Verify the actual service environment without printing tokens or sourcing .env as shell code.
-sudo -u rokid-test /usr/bin/node --env-file="$root/.env" "$repo/server/deploy/check-config.mjs"
+sudo -u rokid-test /usr/bin/node --env-file="$state/.env" "$repo/server/deploy/check-config.mjs"
 stage=$(mktemp -d)
 trap 'rm -rf -- "$stage"' EXIT
 cp -a "$repo/server/src" "$repo/server/public" "$repo/server/test" "$repo/server/deploy" "$stage/"
@@ -88,7 +94,7 @@ rollback() {
     sudo cp -a "$backup/service" "$unit"
     if $update_apache; then sudo cp -a "$backup/apache" "$site"; fi
     sudo systemctl daemon-reload
-    sudo systemctl restart rokid-test
+    if $was_active; then sudo systemctl restart rokid-test; else sudo systemctl stop rokid-test; fi
     sudo apache2ctl configtest && sudo systemctl reload apache2
     sudo systemctl is-active rokid-test
     echo "Previous files restored; check service health and journal. Backup: $backup" >&2
@@ -98,10 +104,8 @@ rollback() {
 trap rollback ERR
 trap 'false' INT TERM
 changed=true
-# Keep the same working directory, env and writable state as the original FTP installation.
-sed 's|/opt/rokid-test/src/index.js|/opt/rokid-test/current/src/index.js|' \
-  "$repo/server/deploy/rokid-test.service" > "$stage/service"
-sudo install -m 644 "$stage/service" "$unit"
+# State lives in server/; tested releases live in the ignored .deploy directory.
+sudo install -m 644 "$repo/server/deploy/rokid-translate.service" "$unit"
 if $update_apache; then sudo install -m 644 "$repo/server/deploy/translate-ssl.conf" "$site"; fi
 sudo apache2ctl configtest
 sudo ln -sfn "$release" "$root/current.next"
